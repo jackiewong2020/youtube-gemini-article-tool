@@ -1,0 +1,11 @@
+services:
+  youtubepost:
+    build: .
+    container_name: youtubepost
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./workspace:/app/workspace

@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from ai_image_generator import generate_ai_section_image
 from history_store import append_history_record
 
 from llm_writer import generate_article_plan
@@ -99,6 +100,8 @@ def _record_history(
         "status": status,
         "source_url": args.url,
         "model": args.model,
+        "image_strategy": args.image_strategy,
+        "gemini_image_model": args.gemini_image_model,
         "target_words": args.target_words,
         "max_images": args.max_images,
         "skip_upload": bool(args.skip_upload),
@@ -133,6 +136,10 @@ def run_pipeline(
 ) -> dict[str, Any]:
     workspace = Path(args.workspace).resolve()
     paths = _build_paths(workspace)
+    image_strategy = str(getattr(args, "image_strategy", "video_only")).strip()
+    gemini_image_model = str(getattr(args, "gemini_image_model", "")).strip()
+    if image_strategy not in {"video_only", "hybrid", "ai_only"}:
+        raise ValueError("image_strategy must be one of: video_only, hybrid, ai_only")
 
     _notify_progress(progress_callback, "初始化", "解析视频链接", 0.03)
     video_id = extract_video_id(args.url)
@@ -159,9 +166,29 @@ def run_pipeline(
         encoding="utf-8",
     )
 
-    _notify_progress(progress_callback, "下载视频", "正在下载并准备截帧", 0.34)
-    video_path, video_info = download_video(args.url, paths["video"])
-    duration = float(video_info.get("duration") or 0)
+    images_to_process = sum(
+        1 for section in article_plan["sections"] if section.get("image", {}).get("need")
+    )
+
+    video_path: Path | None = None
+    duration = 0.0
+    force_ai_images = image_strategy == "ai_only"
+    if images_to_process > 0 and image_strategy in {"video_only", "hybrid"}:
+        _notify_progress(progress_callback, "下载视频", "正在下载并准备截帧", 0.34)
+        try:
+            video_path, video_info = download_video(args.url, paths["video"])
+            duration = float(video_info.get("duration") or 0)
+        except Exception as exc:
+            if image_strategy == "hybrid":
+                force_ai_images = True
+                _notify_progress(
+                    progress_callback,
+                    "下载视频",
+                    f"视频下载失败，自动切换 AI 补图：{exc}",
+                    0.36,
+                )
+            else:
+                raise
 
     uploader = None
     if not args.skip_upload:
@@ -174,9 +201,6 @@ def run_pipeline(
     image_manifest: list[dict[str, Any]] = []
     date_prefix = datetime.now().strftime("%Y%m/%d")
     style_suffix = args.oss_style.strip()
-    images_to_process = sum(
-        1 for section in article_plan["sections"] if section.get("image", {}).get("need")
-    )
     handled_images = 0
 
     for idx, section in enumerate(article_plan["sections"], start=1):
@@ -197,13 +221,55 @@ def run_pipeline(
             step_progress,
         )
 
-        timestamp_seconds = parse_timestamp_to_seconds(image.get("timestamp", "00:00:00"))
-        timestamp_seconds = clamp_timestamp(timestamp_seconds, duration)
+        planned_timestamp = str(image.get("timestamp", "00:00:00"))
+        try:
+            timestamp_seconds = parse_timestamp_to_seconds(planned_timestamp)
+        except Exception:
+            timestamp_seconds = 0.0
 
-        raw_path = paths["frames_raw"] / f"{video_id}_{idx:02d}.png"
+        raw_path = paths["frames_raw"] / f"{video_id}_{idx:02d}_raw.png"
         optimized_path = paths["frames_wechat"] / f"{video_id}_{idx:02d}.webp"
+        image_source = "video"
+        use_ai_image = force_ai_images
 
-        extract_frame(video_path, timestamp_seconds, raw_path)
+        if not use_ai_image:
+            if video_path is None:
+                if image_strategy == "hybrid":
+                    use_ai_image = True
+                else:
+                    raise RuntimeError("Video path not available for frame extraction.")
+            else:
+                timestamp_seconds = clamp_timestamp(timestamp_seconds, duration)
+                try:
+                    extract_frame(video_path, timestamp_seconds, raw_path)
+                except Exception as exc:
+                    if image_strategy == "hybrid":
+                        use_ai_image = True
+                        _notify_progress(
+                            progress_callback,
+                            "处理配图",
+                            f"视频截帧失败，切换 AI 补图：{section['heading']}",
+                            min(step_progress + 0.03, 0.90),
+                        )
+                        print(
+                            "[WARN] frame extraction failed, fallback to AI image. "
+                            f"section={section['heading']} error={exc}"
+                        )
+                    else:
+                        raise
+
+        if use_ai_image:
+            image_source = "ai"
+            raw_path = paths["frames_raw"] / f"{video_id}_{idx:02d}_ai.png"
+            generate_ai_section_image(
+                heading=section["heading"],
+                body_markdown=section["body_markdown"],
+                caption=str(image.get("caption", "")),
+                output_path=raw_path,
+                article_title=str(article_plan.get("title", "")),
+                model_name=gemini_image_model or None,
+            )
+
         preprocess_image_for_wechat(raw_path, optimized_path)
 
         image_url: str
@@ -230,6 +296,7 @@ def run_pipeline(
                 "heading": section["heading"],
                 "timestamp": image.get("timestamp", "00:00:00"),
                 "seconds": timestamp_seconds,
+                "source": image_source,
                 "local_image": str(optimized_path),
                 "image_url": image_url,
                 "caption": image.get("caption", ""),
@@ -278,6 +345,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--url", required=True, help="YouTube video URL")
     parser.add_argument("--prompt", required=True, help="Article writing instruction")
     parser.add_argument("--model", default="gemini-2.5-pro", help="Gemini model name")
+    parser.add_argument(
+        "--image-strategy",
+        choices=["video_only", "hybrid", "ai_only"],
+        default="video_only",
+        help=(
+            "Image source strategy: video_only (from video frames), "
+            "hybrid (video first then AI fallback), ai_only (AI generated)"
+        ),
+    )
+    parser.add_argument(
+        "--gemini-image-model",
+        default="",
+        help="Gemini image model for ai_only/hybrid mode (default uses GEMINI_IMAGE_MODEL)",
+    )
     parser.add_argument(
         "--target-words",
         type=int,
