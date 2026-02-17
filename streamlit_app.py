@@ -25,6 +25,12 @@ STRATEGY_OPTIONS = {
     "AI 补图（不截视频）": "ai_only",
 }
 IMAGE_MARKDOWN_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<url>[^)]+)\)")
+READING_WIDTH_PRESETS = {
+    "紧凑（72%）": 72,
+    "标准（82%）": 82,
+    "宽屏（92%）": 92,
+    "全宽（100%）": 100,
+}
 
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=False)
@@ -56,6 +62,10 @@ def _apply_layout_style(
 
 def _resolve_local_image_path(image_ref: str, workspace: Path) -> Path | None:
     value = image_ref.strip().strip('"').strip("'")
+    if value.startswith("<") and value.endswith(">"):
+        value = value[1:-1].strip()
+    if " " in value:
+        value = value.split(" ", 1)[0].strip()
     if not value:
         return None
 
@@ -68,7 +78,9 @@ def _resolve_local_image_path(image_ref: str, workspace: Path) -> Path | None:
         return candidate if candidate.exists() else None
 
     if value.startswith("http://") or value.startswith("https://"):
-        return None
+        parsed = urlparse(value)
+        remote_name = Path(unquote(parsed.path or "")).name
+        return _find_local_image_by_name(workspace, remote_name)
 
     candidate = Path(value)
     if candidate.is_absolute() and candidate.exists():
@@ -82,6 +94,30 @@ def _resolve_local_image_path(image_ref: str, workspace: Path) -> Path | None:
     if project_candidate.exists():
         return project_candidate
 
+    return None
+
+
+def _find_local_image_by_name(workspace: Path, filename: str) -> Path | None:
+    name = filename.strip()
+    if not name:
+        return None
+
+    likely_dirs = [
+        workspace / "frames" / "wechat",
+        workspace / "frames" / "raw",
+        workspace / "output",
+    ]
+    for folder in likely_dirs:
+        candidate = folder / name
+        if candidate.exists():
+            return candidate
+
+    try:
+        for candidate in workspace.rglob(name):
+            if candidate.is_file():
+                return candidate
+    except Exception:
+        return None
     return None
 
 
@@ -106,10 +142,10 @@ def _render_article_preview(markdown_text: str, workspace: Path) -> None:
         local_image = _resolve_local_image_path(image_ref, workspace)
 
         if local_image:
-            st.image(str(local_image), caption=alt, use_container_width=True)
+            st.image(str(local_image), caption=alt, width="stretch")
         else:
             try:
-                st.image(image_ref, caption=alt, use_container_width=True)
+                st.image(image_ref, caption=alt, width="stretch")
             except Exception:
                 st.markdown(match.group(0))
         cursor = match.end()
@@ -180,20 +216,25 @@ def _render_history(workspace: Path) -> None:
         st.info("暂无历史记录。")
         return
 
+    def display_value(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
+
     display_rows = []
     for item in records:
         display_rows.append(
             {
-                "时间": item.get("created_at", ""),
-                "状态": item.get("status", ""),
-                "视频": item.get("source_url", ""),
-                "字数": item.get("target_words", ""),
-                "图片数": item.get("image_count", ""),
-                "配图策略": item.get("image_strategy", ""),
-                "文章文件": item.get("article", ""),
+                "时间": display_value(item.get("created_at", "")),
+                "状态": display_value(item.get("status", "")),
+                "视频": display_value(item.get("source_url", "")),
+                "字数": display_value(item.get("target_words", "")),
+                "图片数": display_value(item.get("image_count", "")),
+                "配图策略": display_value(item.get("image_strategy", "")),
+                "文章文件": display_value(item.get("article", "")),
             }
         )
-    st.dataframe(display_rows, use_container_width=True)
+    st.dataframe(display_rows, width="stretch")
 
     latest = records[0]
     if latest.get("status") == "success" and latest.get("article"):
@@ -258,7 +299,21 @@ def main() -> None:
         oss_style = st.text_input("OSS 图片样式", value="wechat-style")
         skip_upload = st.checkbox("跳过 OSS 上传（仅本地图片）", value=False)
         st.markdown("---")
-        reading_width_percent = st.slider("阅读区宽度（%）", min_value=65, max_value=100, value=82, step=1)
+        width_mode = st.selectbox(
+            "阅读宽度预设",
+            options=["标准（82%）", "紧凑（72%）", "宽屏（92%）", "全宽（100%）", "自定义"],
+        )
+        reading_width_percent = READING_WIDTH_PRESETS.get(width_mode, 82)
+        if width_mode == "自定义":
+            reading_width_percent = st.slider(
+                "阅读区宽度（%）",
+                min_value=65,
+                max_value=100,
+                value=82,
+                step=1,
+            )
+        else:
+            st.caption(f"当前阅读区宽度：{reading_width_percent}%")
         enable_sidebar_resize = st.checkbox("允许侧栏拖动宽度", value=True)
 
     _apply_layout_style(
@@ -273,8 +328,8 @@ def main() -> None:
     )
 
     col_run, col_history = st.columns([1, 1])
-    run_clicked = col_run.button("开始生成", type="primary", use_container_width=True)
-    show_history = col_history.button("刷新历史", use_container_width=True)
+    run_clicked = col_run.button("开始生成", type="primary", width="stretch")
+    show_history = col_history.button("刷新历史", width="stretch")
 
     workspace_path = Path(workspace).resolve()
 

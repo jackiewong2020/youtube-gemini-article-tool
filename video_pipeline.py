@@ -24,30 +24,49 @@ class TranscriptSegment:
     text: str
 
 
+def _normalize_video_id(candidate: str) -> str:
+    value = str(candidate or "").strip()
+    if not value:
+        return ""
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
+        return value
+    match = re.search(r"[A-Za-z0-9_-]{11}", value)
+    return match.group(0) if match else ""
+
+
 def extract_video_id(youtube_url: str) -> str:
     parsed = urlparse(youtube_url.strip())
     host = (parsed.hostname or "").lower()
 
     if host == "youtu.be":
-        video_id = parsed.path.lstrip("/")
+        video_id = _normalize_video_id(parsed.path.lstrip("/"))
         if video_id:
             return video_id
 
     if "youtube.com" in host:
         if parsed.path == "/watch":
-            video_id = parse_qs(parsed.query).get("v", [""])[0]
+            video_id = _normalize_video_id(parse_qs(parsed.query).get("v", [""])[0])
             if video_id:
                 return video_id
 
         if parsed.path.startswith("/shorts/"):
             parts = [p for p in parsed.path.split("/") if p]
             if len(parts) >= 2:
-                return parts[1]
+                video_id = _normalize_video_id(parts[1])
+                if video_id:
+                    return video_id
 
         if parsed.path.startswith("/embed/"):
             parts = [p for p in parsed.path.split("/") if p]
             if len(parts) >= 2:
-                return parts[1]
+                video_id = _normalize_video_id(parts[1])
+                if video_id:
+                    return video_id
+
+    pattern = r"(?:v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})"
+    match = re.search(pattern, youtube_url)
+    if match:
+        return match.group(1)
 
     raise ValueError(f"Cannot parse video id from URL: {youtube_url}")
 
