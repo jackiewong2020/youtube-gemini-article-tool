@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -22,9 +24,99 @@ STRATEGY_OPTIONS = {
     "混合：截图优先，失败后 AI 补图": "hybrid",
     "AI 补图（不截视频）": "ai_only",
 }
+IMAGE_MARKDOWN_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<url>[^)]+)\)")
 
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=False)
+
+
+def _apply_layout_style(
+    reading_width_percent: int,
+    enable_sidebar_resize: bool,
+) -> None:
+    sidebar_css = "resize: horizontal; overflow: auto;" if enable_sidebar_resize else ""
+    st.markdown(
+        f"""
+<style>
+    [data-testid="stMainBlockContainer"] {{
+        max-width: {reading_width_percent}%;
+        margin-left: auto;
+        margin-right: auto;
+    }}
+    [data-testid="stSidebar"] {{
+        min-width: 240px;
+        max-width: 720px;
+        {sidebar_css}
+    }}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def _resolve_local_image_path(image_ref: str, workspace: Path) -> Path | None:
+    value = image_ref.strip().strip('"').strip("'")
+    if not value:
+        return None
+
+    if value.startswith("file://"):
+        parsed = urlparse(value)
+        path_value = unquote(parsed.path or "")
+        if os.name == "nt" and len(path_value) > 2 and path_value[0] == "/":
+            path_value = path_value[1:]
+        candidate = Path(path_value)
+        return candidate if candidate.exists() else None
+
+    if value.startswith("http://") or value.startswith("https://"):
+        return None
+
+    candidate = Path(value)
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+
+    workspace_candidate = (workspace / value).resolve()
+    if workspace_candidate.exists():
+        return workspace_candidate
+
+    project_candidate = (Path(__file__).resolve().parent / value).resolve()
+    if project_candidate.exists():
+        return project_candidate
+
+    return None
+
+
+def _render_article_preview(markdown_text: str, workspace: Path) -> None:
+    text = str(markdown_text or "").strip()
+    if not text:
+        st.info("暂无文章内容。")
+        return
+
+    if not IMAGE_MARKDOWN_PATTERN.search(text):
+        st.markdown(text)
+        return
+
+    cursor = 0
+    for match in IMAGE_MARKDOWN_PATTERN.finditer(text):
+        prefix = text[cursor : match.start()].strip()
+        if prefix:
+            st.markdown(prefix)
+
+        alt = match.group("alt").strip() or "文章配图"
+        image_ref = match.group("url").strip()
+        local_image = _resolve_local_image_path(image_ref, workspace)
+
+        if local_image:
+            st.image(str(local_image), caption=alt, use_container_width=True)
+        else:
+            try:
+                st.image(image_ref, caption=alt, use_container_width=True)
+            except Exception:
+                st.markdown(match.group(0))
+        cursor = match.end()
+
+    suffix = text[cursor:].strip()
+    if suffix:
+        st.markdown(suffix)
 
 
 def _build_args(
@@ -108,7 +200,10 @@ def _render_history(workspace: Path) -> None:
         latest_article = Path(str(latest["article"]))
         if latest_article.exists():
             with st.expander("最近一次产出预览", expanded=False):
-                st.markdown(latest_article.read_text(encoding="utf-8"))
+                _render_article_preview(
+                    latest_article.read_text(encoding="utf-8"),
+                    workspace=workspace,
+                )
 
 
 def _check_access() -> bool:
@@ -162,6 +257,14 @@ def main() -> None:
         oss_prefix = st.text_input("OSS 路径前缀", value="wechat_article")
         oss_style = st.text_input("OSS 图片样式", value="wechat-style")
         skip_upload = st.checkbox("跳过 OSS 上传（仅本地图片）", value=False)
+        st.markdown("---")
+        reading_width_percent = st.slider("阅读区宽度（%）", min_value=65, max_value=100, value=82, step=1)
+        enable_sidebar_resize = st.checkbox("允许侧栏拖动宽度", value=True)
+
+    _apply_layout_style(
+        reading_width_percent=reading_width_percent,
+        enable_sidebar_resize=enable_sidebar_resize,
+    )
 
     prompt = st.text_area(
         "文章提示词（可自定义）",
@@ -215,7 +318,10 @@ def main() -> None:
             article_path = Path(str(result["article"]))
             if article_path.exists():
                 with st.expander("查看文章结果", expanded=True):
-                    st.markdown(article_path.read_text(encoding="utf-8"))
+                    _render_article_preview(
+                        article_path.read_text(encoding="utf-8"),
+                        workspace=workspace_path,
+                    )
 
     if show_history or not run_clicked:
         _render_history(workspace_path)
