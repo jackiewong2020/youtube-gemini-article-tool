@@ -1,0 +1,113 @@
+# YouTube -> Gemini 自动图文工具（可视化版）
+
+输入 YouTube 链接后，自动完成：
+- 提取字幕与时间戳
+- 生成约 3500 字文章（默认）
+- 根据内容需要自动决定配图位置
+- 从视频时间点自动截帧并插入 Markdown
+- 上传 OSS 并生成中国可访问图片链接
+- 保存历史记录，支持回看每次产出
+
+## 1. 环境要求
+
+- Python 3.10+
+- `ffmpeg`
+- Gemini API Key
+- 阿里云 OSS（可选，不配置也可本地跑通）
+
+安装 ffmpeg（macOS）：
+
+```bash
+brew install ffmpeg
+```
+
+## 2. 安装依赖
+
+```bash
+cd /Users/jackie/Movies/Youtubepost
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## 3. 配置环境变量
+
+```bash
+cp .env.example .env
+```
+
+`.env` 至少需要：
+- `GEMINI_API_KEY`
+
+如果启用 OSS 上传，再填写：
+- `OSS_ACCESS_KEY_ID`
+- `OSS_ACCESS_KEY_SECRET`
+- `OSS_ENDPOINT`
+- `OSS_BUCKET_NAME`
+- `OSS_DOMAIN`
+- `OSS_STYLE`（可选，例：`wechat-style`）
+
+## 4. 启动可视化工具（推荐）
+
+```bash
+cd /Users/jackie/Movies/Youtubepost
+./.venv/bin/streamlit run streamlit_app.py
+```
+
+打开后可配置：
+- 视频链接
+- 自定义提示词
+- 目标字数（默认 3500）
+- 最大配图数（`0=自动按内容决定`）
+- OSS 参数与是否跳过上传
+
+界面会显示实时进度和历史记录。
+
+## 5. 命令行模式
+
+```bash
+cd /Users/jackie/Movies/Youtubepost
+./.venv/bin/python main.py \
+  --url "https://www.youtube.com/watch?v=N7NsveOiG-g" \
+  --prompt "写成一篇面向公众号读者的深度文章，结构清晰，提炼可执行建议，语气自然口语化" \
+  --target-words 3500 \
+  --max-images 0 \
+  --oss-prefix "wechat_article" \
+  --oss-style "wechat-style"
+```
+
+说明：
+- `--target-words` 默认 `3500`
+- `--max-images 0` 表示不固定张数，由内容决定
+
+## 6. 输出目录
+
+默认在 `workspace/`：
+- `workspace/transcript/*.txt`：字幕
+- `workspace/plan/*.json`：文章计划（含配图时间点）
+- `workspace/frames/raw/*.png`：原始截图
+- `workspace/frames/wechat/*.webp`：优化后图片
+- `workspace/output/*.md`：最终文章
+- `workspace/output/*.manifest.json`：图文映射
+- `workspace/history/runs.jsonl`：历史记录
+
+## 7. 部署到 GitHub
+
+如果当前目录还不是 Git 仓库：
+
+```bash
+cd /Users/jackie/Movies/Youtubepost
+git init
+git add .
+git commit -m "feat: add visual app, progress tracking, and history"
+```
+
+创建远程仓库后推送：
+
+```bash
+git branch -M main
+git remote add origin <你的仓库地址>
+git push -u origin main
+```
+
+> 注意：`.env` 已被 `.gitignore` 忽略，不会上传密钥。
