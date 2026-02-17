@@ -2,6 +2,7 @@
 
 输入 YouTube 链接后，自动完成：
 - 提取字幕与时间戳
+- 无字幕时自动走 Gemini 音频转写兜底
 - 生成约 3500 字文章（默认）
 - 根据内容需要自动决定配图位置
 - 支持配图策略：视频截图优先 / 混合补图 / AI 补图
@@ -39,6 +40,8 @@ cp .env.example .env
 `.env` 至少需要：
 - `GEMINI_API_KEY`
 - `GEMINI_IMAGE_MODEL`（可选，默认 `gemini-2.5-flash-image`）
+- `GEMINI_TRANSCRIBE_MODEL`（可选，默认 `gemini-2.5-flash`）
+- `GEMINI_TRANSCRIBE_FALLBACK`（可选，默认 `true`）
 
 如果启用 OSS 上传，再填写：
 - `OSS_ACCESS_KEY_ID`

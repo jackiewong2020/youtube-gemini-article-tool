@@ -12,6 +12,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 from urllib.parse import parse_qs, urlparse
 
+from audio_transcriber import transcribe_video_audio_with_gemini
 from yt_dlp import YoutubeDL
 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -54,6 +55,7 @@ def extract_video_id(youtube_url: str) -> str:
 def fetch_transcript(
     video_id: str,
     languages: Iterable[str] | None = None,
+    youtube_url: str | None = None,
 ) -> list[TranscriptSegment]:
     preferred_langs = list(languages or ("zh-Hans", "zh-CN", "zh", "en"))
 
@@ -65,8 +67,12 @@ def fetch_transcript(
         fallback_segments = _fetch_transcript_via_ytdlp(video_id, preferred_langs)
         if fallback_segments:
             return fallback_segments
+        if youtube_url:
+            gemini_segments = _fetch_transcript_via_gemini(youtube_url)
+            if gemini_segments:
+                return gemini_segments
         raise RuntimeError(
-            "Failed to fetch transcript. Ensure subtitles are available for this video."
+            "Failed to fetch transcript. No subtitle track found and Gemini audio fallback did not return transcript."
         ) from exc
 
     segments: list[TranscriptSegment] = []
@@ -83,6 +89,28 @@ def fetch_transcript(
         )
     if not segments:
         raise RuntimeError("Transcript is empty.")
+    return segments
+
+
+def _fetch_transcript_via_gemini(youtube_url: str) -> list[TranscriptSegment]:
+    raw_segments = transcribe_video_audio_with_gemini(youtube_url)
+    if not raw_segments:
+        return []
+
+    segments: list[TranscriptSegment] = []
+    for item in raw_segments:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", "")).replace("\n", " ").strip()
+        if not text:
+            continue
+        segments.append(
+            TranscriptSegment(
+                start=float(item.get("start", 0.0)),
+                duration=float(item.get("duration", 0.0)),
+                text=text,
+            )
+        )
     return segments
 
 

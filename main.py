@@ -145,7 +145,7 @@ def run_pipeline(
     video_id = extract_video_id(args.url)
 
     _notify_progress(progress_callback, "提取字幕", "正在抓取 YouTube 字幕", 0.10)
-    transcript = fetch_transcript(video_id)
+    transcript = fetch_transcript(video_id, youtube_url=args.url)
     transcript_text = transcript_to_timestamped_text(transcript)
     transcript_path = paths["transcript"] / f"{video_id}.txt"
     transcript_path.write_text(transcript_text, encoding="utf-8")
