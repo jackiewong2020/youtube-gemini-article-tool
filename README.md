@@ -138,3 +138,13 @@ docker compose up -d --build
 
 完整步骤见：
 - `/Users/jackie/Movies/Youtubepost/deploy/hostinger-vps.md`
+
+## 9. Streamlit Cloud 依赖说明
+
+如果部署在 Streamlit Cloud，仓库根目录已包含 `packages.txt`：
+
+```text
+ffmpeg
+```
+
+Streamlit Cloud 会自动安装该系统依赖，避免 `Required binary 'ffmpeg' was not found` 错误。
